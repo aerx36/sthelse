@@ -1,11 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import Icon from './components/Icon'
-import DiscoveryCard from './components/DiscoveryCard'
+import DiscoveryCard, { CardFace } from './components/DiscoveryCard'
 import ThemeSelector from './components/ThemeSelector'
 import { drawDiscoveries, emptyProfile, getDiscoveries, getProfile, recordInterest, type Discovery, type InterestProfile, type Mode } from './lib/discoveries'
 
-type Phase = 'idle' | 'waiting' | 'start' | 'fast' | 'slow' | 'land' | 'draw' | 'flipping' | 'result' | 'returning'
+type Phase = 'idle' | 'spin' | 'settle' | 'land' | 'stack' | 'split' | 'deal' | 'choose' | 'select' | 'flip' | 'reveal' | 'result' | 'returning'
+
+interface Reel { kind: 'spin' | 'settle'; items: string[]; finalIndex: number }
+
+const spinMinimum = 650
+const settleDuration = 1000
+const settleTicks = [0, 90, 190, 310, 460, 650, 880]
+const dealStagger = 110
+const cardCount = 5
 
 function initialProfile(): InterestProfile {
   try {
@@ -23,6 +31,18 @@ const modes: { id: Mode; label: string; description: string; hint: string }[] = 
 ]
 
 const waitingPhrases = ['Tìm một lối rẽ…', 'Băng qua những ý tưởng…', 'Đi xa hơn một chút…', 'Lạc vào điều chưa biết…', 'Một điều bất ngờ đang đến…']
+const spinReel: Reel = { kind: 'spin', items: [...waitingPhrases, ...waitingPhrases], finalIndex: 0 }
+
+const stageCopy: Partial<Record<Phase, { eyebrow: string; title: string; status: string }>> = {
+  stack: { eyebrow: 'SHUFFLING THE DECK', title: 'Xếp bộ bài…', status: 'Đang xếp bộ bài…' },
+  split: { eyebrow: 'SHUFFLING THE DECK', title: 'Xếp bộ bài…', status: 'Đang xếp bộ bài…' },
+  deal: { eyebrow: 'DEALING FIVE POSSIBILITIES', title: 'Chia năm lá bài…', status: 'Đang chia năm lá bài…' },
+  choose: { eyebrow: 'FIVE POSSIBILITIES. ONE LITTLE DETOUR.', title: 'Chọn một lá. Đi một nơi.', status: 'Năm lá bài đã sẵn sàng. Hãy chọn một lá.' },
+  select: { eyebrow: 'LOCKED IN', title: 'Lá bài của bạn.', status: 'Đã chọn một lá bài.' },
+  flip: { eyebrow: 'TURNING IT OVER', title: 'Đang lật…', status: 'Đang lật lá bài…' },
+  reveal: { eyebrow: 'SOMETHING FOUND', title: 'Đây rồi.', status: 'Lá bài đã lật.' },
+  returning: { eyebrow: 'BACK TO THE DECK', title: 'Xếp lại…', status: '' },
+}
 
 function sleep(duration: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -37,8 +57,7 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('weird')
   const [rolling, setRolling] = useState(false)
   const [result, setResult] = useState<Discovery | null>(null)
-  const [reelText, setReelText] = useState('')
-  const [reelKey, setReelKey] = useState(0)
+  const [reel, setReel] = useState<Reel>(spinReel)
   const [error, setError] = useState('')
   const [rolls, setRolls] = useState(0)
   const [soundOn, setSoundOn] = useState(false)
@@ -46,14 +65,14 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>('idle')
   const [deck, setDeck] = useState<Discovery[]>([])
   const [chosenIndex, setChosenIndex] = useState<number | null>(null)
-  const [reelDuration, setReelDuration] = useState(650)
   const [expanded, setExpanded] = useState(false)
   const [memoryNotice, setMemoryNotice] = useState('')
   const [profile, setProfile] = useState<InterestProfile>(initialProfile)
   const requestRef = useRef<AbortController | null>(null)
   const audioRef = useRef<AudioContext | null>(null)
   const interestQueue = useRef<Promise<void>>(Promise.resolve())
-  const resultRef = useRef<HTMLDivElement | null>(null)
+  const resultCardRef = useRef<HTMLDivElement | null>(null)
+  const revealRectRef = useRef<DOMRect | null>(null)
   const aboutRef = useRef<HTMLDialogElement | null>(null)
   const aboutButtonRef = useRef<HTMLButtonElement | null>(null)
   const currentMode = modes.find(item => item.id === mode)!
@@ -118,54 +137,59 @@ export default function App() {
     const controller = new AbortController()
     requestRef.current = controller
     const timeout = window.setTimeout(() => controller.abort(), 28000)
-    let phraseTimer: number | undefined
+    const tickTimers: number[] = []
+    let spinTimer: number | undefined
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const pause = (duration: number) => sleep(reducedMotion ? 0 : duration, controller.signal)
+    const leaving = Boolean(result) || deck.length > 0
     setRolling(true)
     setError('')
     setExpanded(false)
-    setPhase(result ? 'returning' : 'start')
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    await sleep(reducedMotion ? 0 : 150, controller.signal).catch(() => {})
-    if (controller.signal.aborted) { window.clearTimeout(timeout); requestRef.current = null; setRolling(false); return }
-    setResult(null)
-    setDeck([])
-    setChosenIndex(null)
-    setPhase('waiting')
-    setReelDuration(650)
-    setReelText(waitingPhrases[0])
-    if (soundOn) {
-      try {
-        audioRef.current ??= new AudioContext()
-        await audioRef.current.resume()
-      } catch { setSoundOn(false) }
-    }
-    let phraseIndex = 0
-    phraseTimer = window.setInterval(() => {
-      phraseIndex += 1
-      setReelText(waitingPhrases[phraseIndex % waitingPhrases.length])
-      setReelKey(value => value + 1)
-    }, reducedMotion ? 1400 : 700)
+    setPhase(leaving ? 'returning' : 'spin')
     try {
-      const discoveries = await getDiscoveries(mode, controller.signal)
-      window.clearInterval(phraseTimer)
-      const candidates = drawDiscoveries(discoveries, profile)
-      const delays = reducedMotion ? [150] : [65, 65, 65, 70, 80, 90, 110, 130, 160, 190, 220]
-      for (let index = 0; index < delays.length; index += 1) {
-        const item = candidates[index % candidates.length]
-        setPhase(index < 7 ? 'fast' : 'slow')
-        setReelDuration(delays[index])
-        setReelText(item.title)
-        setReelKey(value => value + 1)
-        tick()
-        await sleep(delays[index], controller.signal)
+      if (leaving) await pause(260)
+      setResult(null)
+      setDeck([])
+      setChosenIndex(null)
+      setReel(spinReel)
+      setPhase('spin')
+      if (soundOn) {
+        try {
+          audioRef.current ??= new AudioContext()
+          await audioRef.current.resume()
+        } catch { setSoundOn(false) }
       }
+      spinTimer = window.setInterval(() => tick(), 85)
+      const spinStart = performance.now()
+      const discoveries = await getDiscoveries(mode, controller.signal)
+      const candidates = drawDiscoveries(discoveries, profile)
+      await pause(Math.max(0, spinMinimum - (performance.now() - spinStart)))
+      window.clearInterval(spinTimer)
+      const finalIndex = 9
+      const items = [...Array.from({ length: finalIndex }, (_, index) => candidates[(index + 1) % candidates.length].title), candidates[0].title, candidates[1].title]
+      setReel({ kind: 'settle', items, finalIndex })
+      setPhase('settle')
+      if (!reducedMotion) settleTicks.forEach(delay => tickTimers.push(window.setTimeout(() => tick(), delay)))
+      await pause(settleDuration)
       setPhase('land')
-      setReelDuration(260)
       tick(true)
-      await sleep(reducedMotion ? 0 : 260, controller.signal)
+      await pause(380)
       setDeck(candidates)
-      setPhase('draw')
       setRolls(value => value + 1)
+      if (reducedMotion) {
+        setPhase('choose')
+      } else {
+        setPhase('stack')
+        await pause(480)
+        setPhase('split')
+        await pause(320)
+        setPhase('deal')
+        for (let index = 0; index < cardCount; index += 1) tickTimers.push(window.setTimeout(() => tick(), index * dealStagger))
+        await pause((cardCount - 1) * dealStagger + 700)
+        setPhase('choose')
+      }
     } catch (cause) {
+      setDeck([])
       setPhase('idle')
       if (controller.signal.aborted) {
         setError('Chuyến đi mất hơi lâu. Thử ROLL lại để kết nối với Wikipedia nhé.')
@@ -174,22 +198,31 @@ export default function App() {
       }
     } finally {
       window.clearTimeout(timeout)
-      window.clearInterval(phraseTimer)
+      window.clearInterval(spinTimer)
+      tickTimers.forEach(timer => window.clearTimeout(timer))
       requestRef.current = null
       setRolling(false)
     }
   }
 
   const selectCard = async (index: number) => {
-    if (requestRef.current || chosenIndex !== null) return
+    if (phase !== 'choose' || requestRef.current || chosenIndex !== null) return
     const controller = new AbortController()
     requestRef.current = controller
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const pause = (duration: number) => sleep(reducedMotion ? Math.min(duration, 180) : duration, controller.signal)
     setChosenIndex(index)
-    setPhase('flipping')
+    setPhase('select')
     tick(true)
     try {
-      await sleep(window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 720, controller.signal)
+      await pause(520)
+      setPhase('flip')
+      tick(true)
+      await pause(680)
+      setPhase('reveal')
+      await pause(760)
       const discovery = deck[index]
+      revealRectRef.current = document.querySelector('.card-slot.is-chosen .draw-card')?.getBoundingClientRect() ?? null
       remember(discovery, 'shown')
       setResult(discovery)
       setPhase('result')
@@ -214,15 +247,57 @@ export default function App() {
     } catch {} finally { requestRef.current = null }
   }
 
-  useEffect(() => {
-    if (!result || !resultRef.current) return
-    resultRef.current.querySelector<HTMLHeadingElement>('h2')?.focus({ preventScroll: true })
-    resultRef.current.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' })
+  useLayoutEffect(() => {
+    const card = resultCardRef.current
+    const from = revealRectRef.current
+    revealRectRef.current = null
+    if (!result || !card) return
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const top = card.getBoundingClientRect().top
+    if (top < 70 || top > window.innerHeight * .5) window.scrollBy({ top: top - 96, behavior: 'instant' })
+    card.closest('article')?.querySelector<HTMLHeadingElement>('h2')?.focus({ preventScroll: true })
+    if (!from || reducedMotion || typeof card.animate !== 'function') return
+    const to = card.getBoundingClientRect()
+    const origin = 'top left'
+    const animation = card.animate([
+      { transformOrigin: origin, transform: `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width})` },
+      { transformOrigin: origin, transform: 'none' },
+    ], { duration: 620, easing: 'cubic-bezier(.2,.8,.2,1)' })
+    return () => animation.cancel()
   }, [result])
 
   useEffect(() => {
-    if (phase === 'draw') document.querySelector<HTMLButtonElement>('.draw-card')?.focus({ preventScroll: true })
+    if (phase === 'choose') document.querySelector<HTMLButtonElement>('.draw-card')?.focus({ preventScroll: true })
   }, [phase])
+
+  const tiltCard = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === 'touch' || phase !== 'choose') return
+    const rect = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect()
+    event.currentTarget.style.setProperty('--tilt-x', `${-((event.clientX - rect.left) / rect.width - .5) * 14}deg`)
+    event.currentTarget.style.setProperty('--tilt-y', `${((event.clientY - rect.top) / rect.height - .5) * 14}deg`)
+  }
+
+  const resetTilt = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.currentTarget.style.setProperty('--tilt-x', '0deg')
+    event.currentTarget.style.setProperty('--tilt-y', '0deg')
+  }
+
+  const moveCardFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+    if (!step || phase !== 'choose') return
+    const cards = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('.draw-card')]
+    const current = cards.findIndex(card => card === document.activeElement)
+    if (current === -1) return
+    event.preventDefault()
+    cards[(current + step + cards.length) % cards.length].focus()
+  }
+
+  const showDeck = deck.length > 0 && !result
+  const collapsing = phase === 'stack'
+  const showMachine = !result && (!showDeck || collapsing)
+  const copy = stageCopy[phase]
+  const engineLabel = phase === 'spin' ? 'SEARCHING THE UNKNOWN' : phase === 'settle' ? 'LOCKING ON' : rolling ? 'FOUND FIVE' : 'AWAITING CURIOSITY'
+  const statusText = phase === 'spin' || phase === 'settle' || phase === 'land' ? 'Đang tìm và chọn các khám phá mới…' : result ? `Đã tìm thấy: ${result.title}` : copy?.status ?? ''
 
   return (
     <div className="site-shell">
@@ -233,37 +308,61 @@ export default function App() {
       </header>
 
       <main>
-        {!result && <section className={`machine phase-${phase}`} aria-labelledby="main-title">
+        {!result && <section className={`machine phase-${phase} ${showDeck ? 'has-deck' : ''}`} aria-labelledby="main-title">
           <div className="hero-eyebrow"><span className="status-dot" /> LESS SCROLLING. MORE SERENDIPITY.</div>
           <h1 id="main-title">sthelse<span className="title-asterisk" aria-hidden="true">*</span></h1>
-          <div className="hero-copy"><p>Không biết xem gì?</p><span>Bạn không cần một đích đến. Chỉ cần một chút tò mò.</span></div>
+          <div className="hero-copy"><div className="hero-copy-inner"><p>Không biết xem gì?</p><span>Bạn không cần một đích đến. Chỉ cần một chút tò mò.</span></div></div>
 
           <div className="mode-area">
             <div className="mode-selectors" role="group" aria-label="Chọn chế độ khám phá">
-              {modes.map(item => <button key={item.id} className={`mode-button ${mode === item.id ? 'selected' : ''}`} aria-pressed={mode === item.id} title={item.hint} onClick={() => setMode(item.id)} disabled={rolling || deck.length > 0}><Icon name={item.id} />{item.label}{mode === item.id && <span className="selection-dot" />}</button>)}
+              {modes.map(item => <button key={item.id} className={`mode-button ${mode === item.id ? 'selected' : ''}`} aria-pressed={mode === item.id} title={item.hint} onClick={() => setMode(item.id)} disabled={rolling || showDeck}><Icon name={item.id} />{item.label}{mode === item.id && <span className="selection-dot" />}</button>)}
             </div>
             <p className="mode-description">{currentMode.description}</p>
           </div>
 
-          {!deck.length && <div className={`randomizer ${rolling ? 'is-rolling' : ''} phase-${phase}`} aria-busy={rolling}>
-            <div className="randomizer-top"><span><span className="tiny-cross">+</span> THE POSSIBILITY ENGINE</span><span>{rolling ? 'SEARCHING THE UNKNOWN' : result ? 'SOMETHING FOUND' : 'AWAITING CURIOSITY'}<span className={`engine-dot ${rolling ? 'active' : ''}`} /></span></div>
-            <div className="reel-window">
-              <span className="reel-marker marker-left" aria-hidden="true">›</span>
-              <div className={`reel ${rolling ? 'moving' : ''}`}>
-                {rolling ? <><span className="ghost-text" aria-hidden="true">{currentMode.hint}</span><span key={reelKey} className="reel-title" style={{ animationDuration: `${reelDuration}ms` }}>{reelText}</span><span className="ghost-text" aria-hidden="true">Đi đâu cũng được.</span></> : <div className="idle-reel"><span className="coordinate coordinate-left" aria-hidden="true">∞ POSSIBILITIES</span><div className="orbit-symbol" aria-hidden="true"><Icon name="star" /><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-satellite" /></div><span className="coordinate coordinate-right" aria-hidden="true">01 CLICK AWAY</span><p>{rolls ? 'Thế giới còn nhiều điều hay.' : 'Đi đâu đó. Bất cứ đâu.'}</p></div>}
+          <div className="stage">
+            {showMachine && <div className={`randomizer ${rolling ? 'is-rolling' : ''} ${collapsing ? 'is-collapsing' : ''} phase-${phase}`} aria-busy={rolling}>
+              <div className="randomizer-top"><span><span className="tiny-cross">+</span> THE POSSIBILITY ENGINE</span><span>{engineLabel}<span className={`engine-dot ${rolling ? 'active' : ''}`} /></span></div>
+              <div className="reel-window">
+                <span className="reel-marker marker-left" aria-hidden="true">›</span>
+                {rolling ? <>
+                  <span className="reel-lane" aria-hidden="true" />
+                  <div key={reel.kind} className={`reel-strip is-${reel.kind}`} style={{ '--travel': reel.finalIndex, '--rows': reel.items.length } as React.CSSProperties} aria-hidden="true">
+                    {reel.items.map((item, index) => <span key={index} className={`reel-item ${reel.kind === 'settle' && index === reel.finalIndex ? 'is-final' : ''}`}>{item}</span>)}
+                  </div>
+                </> : <div className="reel"><div className="idle-reel"><span className="coordinate coordinate-left" aria-hidden="true">∞ POSSIBILITIES</span><div className="orbit-symbol" aria-hidden="true"><Icon name="star" /><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-satellite" /></div><span className="coordinate coordinate-right" aria-hidden="true">01 CLICK AWAY</span><p>{rolls ? 'Thế giới còn nhiều điều hay.' : 'Đi đâu đó. Bất cứ đâu.'}</p></div></div>}
+                <span className="reel-marker marker-right" aria-hidden="true">‹</span>
               </div>
-              <span className="reel-marker marker-right" aria-hidden="true">‹</span>
-            </div>
-            <div className="roll-row"><button className="roll-button" onClick={() => void roll()} disabled={rolling} aria-label={rolling ? 'Đang khám phá' : 'ROLL — khám phá một điều mới'}><span className="roll-button-star"><Icon name="star" /></span><span>{rolling ? 'ROLLING' : 'ROLL'}</span><span className="roll-button-arrow"><Icon name="arrow" /></span></button></div>
-            <div className="randomizer-bottom"><span>{rolling ? 'THE INTERNET IS A BIG PLACE.' : 'ONE CLICK. SOMEWHERE NEW.'}</span><span className="keyboard-hint">{rolling ? 'LET IT HAPPEN' : 'TAKE A CHANCE'} <span aria-hidden="true">↗</span></span></div>
-          </div>}
-          {!!deck.length && <section className="card-draw" aria-label="Chọn một trong năm lá bài"><p className="draw-eyebrow">FIVE POSSIBILITIES. ONE LITTLE DETOUR.</p><h2>Chọn một lá. Đi một nơi.</h2><div className={`card-spread ${chosenIndex !== null ? 'has-choice' : ''}`}>{deck.map((discovery, index) => <button key={discovery.id} className={`draw-card ${chosenIndex === index ? 'is-chosen' : ''}`} style={{ '--rotation': `${(index - 2) * 4}deg`, '--lift': `${Math.abs(index - 2) * 9}px`, '--deal-delay': `${index * 65}ms` } as React.CSSProperties} aria-label={`Chọn lá bài ${index + 1} trên 5`} disabled={chosenIndex !== null} onPointerMove={event => { const rect = event.currentTarget.getBoundingClientRect(); event.currentTarget.style.setProperty('--tilt', `${((event.clientX - rect.left) / rect.width - .5) * 6}deg`) }} onPointerLeave={event => event.currentTarget.style.setProperty('--tilt', '0deg')} onClick={() => void selectCard(index)}><span className="card-flipper"><span className="card-back"><span className="card-corner">sthelse / {String(index + 1).padStart(2, '0')}</span><span className="card-emblem"><Icon name="star" /></span><span className="card-back-title">sthelse</span><span className="card-back-caption">SOMETHING YOU HAVEN’T MET.</span><span className="card-bottom-number">? / ∞</span></span><span className="card-front"><span className="card-corner">{discovery.topic}</span><strong>{discovery.title}</strong><span>{discovery.description}</span><span className="card-corner">WIKIPEDIA ↗</span></span></span></button>)}</div><p className="draw-hint">Năm khả năng. Chỉ một lựa chọn. Không có đáp án sai.</p><button className="shuffle-link" disabled={chosenIndex !== null} onClick={() => void roll()}>↻ SHUFFLE AGAIN</button></section>}
+              <div className="roll-row"><button className="roll-button" onClick={() => void roll()} disabled={rolling} aria-label={rolling ? 'Đang khám phá' : 'ROLL — khám phá một điều mới'}><span className="roll-button-star"><Icon name="star" /></span><span>{rolling ? 'ROLLING' : 'ROLL'}</span><span className="roll-button-arrow"><Icon name="arrow" /></span></button></div>
+              <div className="randomizer-bottom"><span>{rolling ? 'THE INTERNET IS A BIG PLACE.' : 'ONE CLICK. SOMEWHERE NEW.'}</span><span className="keyboard-hint">{rolling ? 'LET IT HAPPEN' : 'TAKE A CHANCE'} <span aria-hidden="true">↗</span></span></div>
+            </div>}
+            {showDeck && <section className={`card-draw ${phase === 'returning' ? 'is-leaving' : ''}`} aria-label="Chọn một trong năm lá bài">
+              <p className="draw-eyebrow">{copy?.eyebrow}</p>
+              <h2>{copy?.title}</h2>
+              <div className="card-spread" data-phase={phase} data-has-choice={chosenIndex !== null ? '' : undefined} role="group" aria-label="Năm lá bài úp mặt" onKeyDown={moveCardFocus}>
+                {deck.map((discovery, index) => {
+                  const chosen = chosenIndex === index
+                  const ready = phase === 'choose'
+                  return <div key={discovery.id} className={`card-slot ${chosen ? 'is-chosen' : ''} ${chosen && (phase === 'flip' || phase === 'reveal') ? 'is-flipped' : ''}`} style={{ '--i': index, '--offset': index - 2, '--distance': Math.abs(index - 2), '--deal-delay': `${index * dealStagger}ms` } as React.CSSProperties}>
+                    <button className="draw-card" aria-label={chosen ? `Lá bài ${index + 1} trên ${cardCount}, đã chọn` : `Lá bài ${index + 1} trên ${cardCount}, đang úp mặt. Nhấn để chọn`} aria-pressed={chosen} aria-disabled={!ready} tabIndex={ready || chosen ? 0 : -1} onPointerMove={tiltCard} onPointerLeave={resetTilt} onClick={() => void selectCard(index)}>
+                      <span className="card-flipper">
+                        <span className="card-back" aria-hidden="true"><span className="card-corner">sthelse</span><span className="card-emblem"><Icon name="star" /></span><span className="card-bottom-number">{String(index + 1).padStart(2, '0')} / {String(cardCount).padStart(2, '0')}</span></span>
+                        <span className="card-face card-front"><CardFace discovery={discovery} /></span>
+                      </span>
+                    </button>
+                  </div>
+                })}
+              </div>
+              <p className={`draw-hint ${phase === 'choose' ? '' : 'is-hidden'}`}>Năm khả năng. Chỉ một lựa chọn. Không có đáp án sai.</p>
+              <button className="shuffle-link" disabled={phase !== 'choose'} onClick={() => void roll()}>↻ SHUFFLE AGAIN</button>
+            </section>}
+          </div>
           <p className="below-machine">Không tài khoản. Không đích đến. <span>Một chút tò mò, một chút bất ngờ.</span></p>
-          <div className="live-status" role="status" aria-live="polite" aria-atomic="true">{rolling ? 'Đang tìm và chọn một khám phá mới…' : result ? `Đã tìm thấy: ${result.title}` : ''}</div>
+          <div className="live-status" role="status" aria-live="polite" aria-atomic="true">{statusText}</div>
           {error && <div className="error-message" role="alert"><span className="error-symbol">!</span><p>{error}</p></div>}
         </section>}
 
-        {result && <div ref={resultRef} className={`result-section focused-result ${phase === 'returning' ? 'is-leaving' : ''}`}><div className="result-label"><span>sthelse / YOUR LITTLE DETOUR</span><span>{String(rolls).padStart(3, '0')}</span></div><DiscoveryCard key={`${rolls}-${result.id}`} discovery={result} number={rolls} expanded={expanded} /><div className="knowledge-actions"><button className="knowledge-button" disabled={rolling || phase === 'returning'} onClick={() => void markKnown()}>OH, I KNOW THAT <span aria-hidden="true">↗</span></button><button className="knowledge-button interest-button" aria-expanded={expanded} aria-controls="discovery-explanation" disabled={expanded || rolling || phase === 'returning'} onClick={() => { remember(result, 'unknown'); setExpanded(true) }}>I DON'T KNOW ABOUT THAT <span aria-hidden="true">+</span></button></div>{expanded && <p className="interest-note" role="status">Một lối rẽ đáng giữ lại. Những lần ROLL sau sẽ có thêm chút điều bạn thích.</p>}<button className="shuffle-link result-shuffle" disabled={rolling || phase === 'returning'} onClick={() => void roll()}>↻ SHUFFLE AGAIN</button><p className="result-footnote">Không phải bài kiểm tra. Chỉ là cách sự tò mò dẫn đường.</p></div>}
+        {result && <div className={`result-section focused-result ${phase === 'returning' ? 'is-leaving' : ''}`}><div className="result-label"><span>sthelse / YOUR LITTLE DETOUR</span><span>{String(rolls).padStart(3, '0')}</span></div><DiscoveryCard key={`${rolls}-${result.id}`} discovery={result} number={rolls} expanded={expanded} faceRef={resultCardRef}><div className="knowledge-actions"><button className="knowledge-button" disabled={rolling || phase === 'returning'} onClick={() => void markKnown()}>OH, I KNOW THAT <span aria-hidden="true">↗</span></button><button className="knowledge-button interest-button" aria-expanded={expanded} aria-controls="discovery-explanation" disabled={expanded || rolling || phase === 'returning'} onClick={() => { remember(result, 'unknown'); setExpanded(true) }}>I DON'T KNOW ABOUT THAT <span aria-hidden="true">+</span></button></div>{expanded && <p className="interest-note" role="status">Một lối rẽ đáng giữ lại. Những lần ROLL sau sẽ có thêm chút điều bạn thích.</p>}<button className="shuffle-link result-shuffle" disabled={rolling || phase === 'returning'} onClick={() => void roll()}>↻ SHUFFLE AGAIN</button><p className="result-footnote">Không phải bài kiểm tra. Chỉ là cách sự tò mò dẫn đường.</p></DiscoveryCard><div className="live-status" role="status" aria-live="polite" aria-atomic="true">{statusText}</div></div>}
 
         {memoryNotice && <p className="memory-notice" role="status">{memoryNotice}</p>}
         {!result && <div className="manifesto"><span className="manifesto-line" /><p>The internet is still a weird, wonderful place.<br /><span>Let’s get a little lost.</span></p><span className="manifesto-line" /></div>}

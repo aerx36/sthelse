@@ -1,14 +1,31 @@
 import { useEffect, useState } from 'react'
+import type * as React from 'react'
 import { getDiscoveryImages, type Discovery, type DiscoveryImage } from '../lib/discoveries'
 import Icon from './Icon'
 
-function FeatureImage({ image, title, index, loading }: { image?: DiscoveryImage; title: string; index: number; loading: boolean }) {
-  const [failed, setFailed] = useState(false)
+const imageWidths = [400, 800]
 
-  return <figure className="feature-image"><div className="feature-image-frame">{image && !failed ? <a href={image.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`Hình ${index + 1}: ${image.title} — xem nguồn`}><img src={image.url} alt={image.title || title} loading="lazy" decoding="async" onError={() => setFailed(true)} /></a> : <div className={`image-placeholder ${loading ? 'is-loading' : ''}`}><Icon name="star" /><span>{loading ? 'Đang tìm hình từ bài viết…' : image && failed ? 'Hình ảnh chưa tải được.' : 'Nguồn chưa có thêm hình phù hợp.'}</span><span className="placeholder-number">{String(index + 1).padStart(2, '0')} / 03</span></div>}</div>{image && <figcaption><a href={image.sourceUrl} target="_blank" rel="noopener noreferrer">{image.artist} · {image.license} ↗</a></figcaption>}</figure>
+function cdnUrl(source: string, width: number): string {
+  return `/.netlify/images?${new URLSearchParams({ url: source, w: String(width), fm: 'avif', q: '80' })}`
 }
 
-export default function DiscoveryCard({ discovery, number, expanded }: { discovery: Discovery; number: number; expanded: boolean }) {
+function FeatureImage({ image, title, index, loading }: { image?: DiscoveryImage; title: string; index: number; loading: boolean }) {
+  const [attempt, setAttempt] = useState<'cdn' | 'direct' | 'failed'>('cdn')
+  const optimized = attempt === 'cdn'
+
+  return <figure className="feature-image"><div className="feature-image-frame">{image && attempt !== 'failed' ? <a href={image.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`Hình ${index + 1}: ${image.title} — xem nguồn`}><img key={attempt} src={optimized ? cdnUrl(image.url, 800) : image.url} srcSet={optimized ? imageWidths.map(width => `${cdnUrl(image.url, width)} ${width}w`).join(', ') : undefined} sizes="(max-width: 600px) 100vw, (max-width: 850px) 220px, 340px" width={800} height={600} alt={image.title || title} loading="lazy" decoding="async" onError={() => setAttempt(optimized ? 'direct' : 'failed')} /></a> : <div className={`image-placeholder ${loading ? 'is-loading' : ''}`}><Icon name="star" /><span>{loading ? 'Đang tìm hình từ bài viết…' : image && attempt === 'failed' ? 'Hình ảnh chưa tải được.' : 'Nguồn chưa có thêm hình phù hợp.'}</span><span className="placeholder-number">{String(index + 1).padStart(2, '0')} / 03</span></div>}</div>{image && <figcaption><a href={image.sourceUrl} target="_blank" rel="noopener noreferrer">{image.artist} · {image.license} ↗</a></figcaption>}</figure>
+}
+
+export function CardFace({ discovery, heading = false }: { discovery: Discovery; heading?: boolean }) {
+  return <>
+    <span className="face-category"><i /> {discovery.mode.toUpperCase()} <span className="meta-divider">/</span> {discovery.topic}</span>
+    {heading ? <h2 id="discovery-title" className="face-title" tabIndex={-1}>{discovery.title}</h2> : <strong className="face-title">{discovery.title}</strong>}
+    <span className="face-description">{discovery.description}</span>
+    <span className="face-source"><span>{discovery.source} ↗</span><span>{discovery.language === 'vi' ? 'TIẾNG VIỆT' : 'ENGLISH'}</span></span>
+  </>
+}
+
+export default function DiscoveryCard({ discovery, number, expanded, faceRef, children }: { discovery: Discovery; number: number; expanded: boolean; faceRef: React.Ref<HTMLDivElement>; children: React.ReactNode }) {
   const [images, setImages] = useState<DiscoveryImage[]>([])
   const [loading, setLoading] = useState(true)
   const [imageError, setImageError] = useState('')
@@ -26,10 +43,9 @@ export default function DiscoveryCard({ discovery, number, expanded }: { discove
 
   return (
     <article className="discovery-card result-discovery" aria-labelledby="discovery-title">
-      <div className="discovery-content">
+      <div className="result-card" ref={faceRef}><div className="card-face result-face"><CardFace discovery={discovery} heading /></div></div>
+      <div className="result-detail">
         <div className="discovery-meta"><span><i /> DISCOVERY {String(number).padStart(3, '0')}</span><span>{discovery.mode.toUpperCase()} <span className="meta-divider">/</span> {discovery.topic}</span></div>
-        <h2 id="discovery-title" tabIndex={-1}>{discovery.title}</h2>
-        <p className="discovery-description">{discovery.description}</p>
         {discovery.language === 'en' && <p className="language-note">Chưa có bản tiếng Việt phù hợp. Một chuyến đi bằng tiếng Anh nhé.</p>}
         <div className="feature-gallery" aria-label="Ba hình ảnh từ bài viết">{Array.from({ length: 3 }, (_, index) => <FeatureImage key={`${attempt}-${index}`} image={images[index]} title={discovery.title} index={index} loading={loading} />)}</div>
         {imageError && <p className="gallery-notice" role="status">{imageError} <button onClick={() => setAttempt(value => value + 1)}>Thử tải lại ↻</button></p>}
@@ -39,6 +55,7 @@ export default function DiscoveryCard({ discovery, number, expanded }: { discove
           <div className="source"><a href={discovery.url} target="_blank" rel="noopener noreferrer">{discovery.source}<span aria-hidden="true"> ↗</span></a><span>{discovery.language === 'vi' ? 'NỘI DUNG TIẾNG VIỆT' : 'NỘI DUNG GỐC · ENGLISH'}</span></div>
           <span className="source-language">{discovery.language === 'vi' ? 'TÒ MÒ THÊM MỘT CHÚT.' : 'ORIGINAL SOURCE, ALWAYS.'}</span>
         </div>
+        {children}
       </div>
     </article>
   )
