@@ -445,3 +445,6 @@ h1, .title-asterisk, .mode-area { transition: font-size .5s cubic-bezier(.2, .8,
   .reel-strip.is-spin { filter: none; }
   .reel-strip { will-change: auto; }
 }
+
+.randomizer { border: 0; background: transparent; box-shadow: none; padding: 8px 0; }
+.randomizer::before, .randomizer::after { display: none; }

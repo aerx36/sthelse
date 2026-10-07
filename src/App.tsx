@@ -7,11 +7,7 @@ import { drawDiscoveries, emptyProfile, getDiscoveries, getProfile, recordIntere
 
 type Phase = 'idle' | 'spin' | 'settle' | 'land' | 'stack' | 'split' | 'deal' | 'choose' | 'select' | 'flip' | 'reveal' | 'result' | 'returning'
 
-interface Reel { kind: 'spin' | 'settle'; items: string[]; finalIndex: number }
 
-const spinMinimum = 650
-const settleDuration = 1000
-const settleTicks = [0, 90, 190, 310, 460, 650, 880]
 const dealStagger = 110
 const cardCount = 5
 
@@ -31,7 +27,6 @@ const modes: { id: Mode; label: string; description: string; hint: string }[] = 
 ]
 
 const waitingPhrases = ['Tìm một lối rẽ…', 'Băng qua những ý tưởng…', 'Đi xa hơn một chút…', 'Lạc vào điều chưa biết…', 'Một điều bất ngờ đang đến…']
-const spinReel: Reel = { kind: 'spin', items: [...waitingPhrases, ...waitingPhrases], finalIndex: 0 }
 
 const stageCopy: Partial<Record<Phase, { eyebrow: string; title: string; status: string }>> = {
   stack: { eyebrow: 'SHUFFLING THE DECK', title: 'Xếp bộ bài…', status: 'Đang xếp bộ bài…' },
@@ -57,7 +52,6 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('weird')
   const [rolling, setRolling] = useState(false)
   const [result, setResult] = useState<Discovery | null>(null)
-  const [reel, setReel] = useState<Reel>(spinReel)
   const [error, setError] = useState('')
   const [rolls, setRolls] = useState(0)
   const [soundOn, setSoundOn] = useState(false)
@@ -138,7 +132,6 @@ export default function App() {
     requestRef.current = controller
     const timeout = window.setTimeout(() => controller.abort(), 28000)
     const tickTimers: number[] = []
-    let spinTimer: number | undefined
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const pause = (duration: number) => sleep(reducedMotion ? 0 : duration, controller.signal)
     const leaving = Boolean(result) || deck.length > 0
@@ -151,7 +144,6 @@ export default function App() {
       setResult(null)
       setDeck([])
       setChosenIndex(null)
-      setReel(spinReel)
       setPhase('spin')
       if (soundOn) {
         try {
@@ -159,21 +151,8 @@ export default function App() {
           await audioRef.current.resume()
         } catch { setSoundOn(false) }
       }
-      spinTimer = window.setInterval(() => tick(), 85)
-      const spinStart = performance.now()
       const discoveries = await getDiscoveries(mode, controller.signal)
       const candidates = drawDiscoveries(discoveries, profile)
-      await pause(Math.max(0, spinMinimum - (performance.now() - spinStart)))
-      window.clearInterval(spinTimer)
-      const finalIndex = 9
-      const items = [...Array.from({ length: finalIndex }, (_, index) => candidates[(index + 1) % candidates.length].title), candidates[0].title, candidates[1].title]
-      setReel({ kind: 'settle', items, finalIndex })
-      setPhase('settle')
-      if (!reducedMotion) settleTicks.forEach(delay => tickTimers.push(window.setTimeout(() => tick(), delay)))
-      await pause(settleDuration)
-      setPhase('land')
-      tick(true)
-      await pause(380)
       setDeck(candidates)
       setRolls(value => value + 1)
       if (reducedMotion) {
@@ -198,7 +177,6 @@ export default function App() {
       }
     } finally {
       window.clearTimeout(timeout)
-      window.clearInterval(spinTimer)
       tickTimers.forEach(timer => window.clearTimeout(timer))
       requestRef.current = null
       setRolling(false)
@@ -296,7 +274,6 @@ export default function App() {
   const collapsing = phase === 'stack'
   const showMachine = !result && (!showDeck || collapsing)
   const copy = stageCopy[phase]
-  const engineLabel = phase === 'spin' ? 'SEARCHING THE UNKNOWN' : phase === 'settle' ? 'LOCKING ON' : rolling ? 'FOUND FIVE' : 'AWAITING CURIOSITY'
   const statusText = phase === 'spin' || phase === 'settle' || phase === 'land' ? 'Đang tìm và chọn các khám phá mới…' : result ? `Đã tìm thấy: ${result.title}` : copy?.status ?? ''
 
   return (
@@ -322,19 +299,7 @@ export default function App() {
 
           <div className="stage">
             {showMachine && <div className={`randomizer ${rolling ? 'is-rolling' : ''} ${collapsing ? 'is-collapsing' : ''} phase-${phase}`} aria-busy={rolling}>
-              <div className="randomizer-top"><span><span className="tiny-cross">+</span> THE POSSIBILITY ENGINE</span><span>{engineLabel}<span className={`engine-dot ${rolling ? 'active' : ''}`} /></span></div>
-              <div className="reel-window">
-                <span className="reel-marker marker-left" aria-hidden="true">›</span>
-                {rolling ? <>
-                  <span className="reel-lane" aria-hidden="true" />
-                  <div key={reel.kind} className={`reel-strip is-${reel.kind}`} style={{ '--travel': reel.finalIndex, '--rows': reel.items.length } as React.CSSProperties} aria-hidden="true">
-                    {reel.items.map((item, index) => <span key={index} className={`reel-item ${reel.kind === 'settle' && index === reel.finalIndex ? 'is-final' : ''}`}>{item}</span>)}
-                  </div>
-                </> : <div className="reel"><div className="idle-reel"><span className="coordinate coordinate-left" aria-hidden="true">∞ POSSIBILITIES</span><div className="orbit-symbol" aria-hidden="true"><Icon name="star" /><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-satellite" /></div><span className="coordinate coordinate-right" aria-hidden="true">01 CLICK AWAY</span><p>{rolls ? 'Thế giới còn nhiều điều hay.' : 'Đi đâu đó. Bất cứ đâu.'}</p></div></div>}
-                <span className="reel-marker marker-right" aria-hidden="true">‹</span>
-              </div>
               <div className="roll-row"><button className="roll-button" onClick={() => void roll()} disabled={rolling} aria-label={rolling ? 'Đang khám phá' : 'ROLL — khám phá một điều mới'}><span className="roll-button-star"><Icon name="star" /></span><span>{rolling ? 'ROLLING' : 'ROLL'}</span><span className="roll-button-arrow"><Icon name="arrow" /></span></button></div>
-              <div className="randomizer-bottom"><span>{rolling ? 'THE INTERNET IS A BIG PLACE.' : 'ONE CLICK. SOMEWHERE NEW.'}</span><span className="keyboard-hint">{rolling ? 'LET IT HAPPEN' : 'TAKE A CHANCE'} <span aria-hidden="true">↗</span></span></div>
             </div>}
             {showDeck && <section className={`card-draw ${phase === 'returning' ? 'is-leaving' : ''}`} aria-label="Chọn một trong năm lá bài">
               <p className="draw-eyebrow">{copy?.eyebrow}</p>
