@@ -68,7 +68,7 @@ export default async (request: Request) => {
       try { const english = await englishArticle(original, signal); if (english) images.push(...await imagesFor(english, signal)) } catch {}
     }
     const unique = uniqueImages(images)
-    return Response.json({ images: unique }, { headers: { 'Cache-Control': 'public, max-age=3600' } })
+    return Response.json({ images: unique }, { headers: { 'Cache-Control': 'public, max-age=3600', 'Netlify-CDN-Cache-Control': 'public, s-maxage=86400, stale-while-revalidate=86400' } })
   } catch { return Response.json({ error: 'Images unavailable' }, { status: 503 }) }
 }
 
