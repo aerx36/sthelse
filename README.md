@@ -1,4 +1,4 @@
-# sthelse
+# https://sthelse.netlify.app/
 
 A small escape from the algorithm. sthelse is a Vietnamese-first internet discovery toy: choose **WEIRD**, **LEARN**, **EXPLORE**, or **CHAOS**, press the single **ROLL** button, watch the vertical slot reel, and pick one of five facedown cards. The selected card flips into a focused discovery page. The existing condensed typography, muted palette, grain, and single-reel interaction remain intact.
 
