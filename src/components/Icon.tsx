@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-type IconName = 'weird' | 'learn' | 'explore' | 'chaos' | 'arrow' | 'sound' | 'mute' | 'star' | 'close'
+type IconName = 'weird' | 'learn' | 'explore' | 'chaos' | 'arrow' | 'sound' | 'mute' | 'star' | 'close' | 'language'
 
 export default function Icon({ name, className = '' }: { name: IconName; className?: string }) {
   const paths: Record<IconName, ReactNode> = {
@@ -13,6 +13,7 @@ export default function Icon({ name, className = '' }: { name: IconName; classNa
     mute: <><path d="m11 4-5 4H3v8h3l5 4V4Zm5 5 6 6m0-6-6 6" /></>,
     star: <><path d="M12 1v22M1 12h22M4 4l16 16M4 20 20 4" /><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" /></>,
     close: <path d="m6 6 12 12M6 18 18 6" />,
+    language: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" /></>,
   }
   return <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">{paths[name]}</svg>
 }

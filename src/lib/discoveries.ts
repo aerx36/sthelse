@@ -57,7 +57,7 @@ export async function getDiscoveryImages(discovery: Discovery, signal: AbortSign
   const response = await fetch(`/.netlify/functions/images?${params}`, { signal })
   if (!response.ok) throw new Error('Chưa kết nối được với hình ảnh. Thử lại nhé.')
   const data = await response.json() as { images: DiscoveryImage[] }
-  return data.images.slice(0, 3)
+  return data.images.filter(image => !/\bsongbird\b/i.test(`${image.title} ${image.sourceUrl}`)).slice(0, 3)
 }
 
 export async function getProfile(signal: AbortSignal): Promise<InterestProfile> {

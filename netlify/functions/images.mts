@@ -26,7 +26,7 @@ async function imagesFor(url: URL, signal: AbortSignal): Promise<DiscoveryImage[
   const data = await response.json() as { query?: { pages?: ImagePage[] } }
   const images: DiscoveryImage[] = []
   for (const page of data.query?.pages || []) {
-    if (/\b(flag|logo|icon|symbol|commons|wiki|edit|speaker|question|ambox|lock|padlock|cscr|disambig|red pog|blue pog)\b/i.test(page.title.replace(/_/g, ' '))) continue
+    if (/\b(flag|logo|icon|symbol|commons|wiki|edit|speaker|question|ambox|lock|padlock|cscr|disambig|red pog|blue pog|songbird)\b/i.test(page.title.replace(/_/g, ' '))) continue
     const info = page.imageinfo?.[0]
     if (!info) continue
     const imageUrl = new URL(info.thumburl || info.url)

@@ -96,6 +96,16 @@ function chooseMode(mode: Mode): ContentMode {
   return chance < 0.4 ? 'weird' : chance < 0.75 ? 'learn' : 'explore'
 }
 
+function randomTopic(mode: ContentMode): Topic {
+  const labels: Record<ContentMode, string[]> = {
+    weird: ['NGẪU NHIÊN / THIÊN NHIÊN', 'NGẪU NHIÊN / HIỆN TƯỢNG', 'NGẪU NHIÊN / CHUYỆN LẠ'],
+    learn: ['NGẪU NHIÊN / KHOA HỌC', 'NGẪU NHIÊN / LỊCH SỬ', 'NGẪU NHIÊN / ĐỜI SỐNG'],
+    explore: ['NGẪU NHIÊN / ĐỊA LÝ', 'NGẪU NHIÊN / VĂN HÓA', 'NGẪU NHIÊN / THẾ GIỚI'],
+  }
+  const label = labels[mode][Math.floor(Math.random() * labels[mode].length)]
+  return { vi: '', en: '', label }
+}
+
 async function wiki(language: 'vi' | 'en', params: Record<string, string>, signal: AbortSignal): Promise<WikiPage[]> {
   const url = new URL(`https://${language}.wikipedia.org/w/api.php`)
   url.search = new URLSearchParams({ action: 'query', format: 'json', formatversion: '2', ...params }).toString()
@@ -205,6 +215,16 @@ async function searchTopic(language: 'vi' | 'en', topic: Topic, signal: AbortSig
   }, signal)
 }
 
+async function searchRandom(language: 'vi' | 'en', signal: AbortSignal): Promise<WikiPage[]> {
+  return wiki(language, {
+    ...pageParams(),
+    generator: 'random',
+    grnnamespace: '0',
+    grnlimit: '24',
+    grnfilterredir: 'nonredirects',
+  }, signal)
+}
+
 export default async (request: Request) => {
   if (request.method !== 'GET') return Response.json({ error: 'Method not allowed' }, { status: 405, headers: { Allow: 'GET' } })
   const rawMode = new URL(request.url).searchParams.get('mode') || 'weird'
@@ -219,9 +239,16 @@ export default async (request: Request) => {
     }
     const contentModes: ContentMode[] = rawMode === 'chaos' ? shuffle(['weird', 'learn', 'explore'] as ContentMode[]) : [chooseMode(rawMode as Mode), chooseMode(rawMode as Mode), chooseMode(rawMode as Mode)]
     const seeds = contentModes.map(mode => ({ mode, topic: chooseTopic(mode, weights) }))
-    const searches = await Promise.allSettled(seeds.flatMap(seed => [searchTopic('vi', seed.topic, signal), searchTopic('en', seed.topic, signal)]))
-    const vietnamese = searches.flatMap((search, index) => index % 2 === 0 && search.status === 'fulfilled' ? search.value.map(page => ({ page, ...seeds[Math.floor(index / 2)] })) : []).filter(item => isInteresting(item.page) && hasFeatureImages(item.page))
-    const english = searches.flatMap((search, index) => index % 2 === 1 && search.status === 'fulfilled' ? search.value.map(page => ({ page, ...seeds[Math.floor(index / 2)] })) : []).filter(item => isInteresting(item.page) && hasFeatureImages(item.page))
+    const topicSearches = await Promise.allSettled(seeds.flatMap(seed => [searchTopic('vi', seed.topic, signal), searchTopic('en', seed.topic, signal)]))
+    const randomMode = chooseMode(rawMode as Mode)
+    const randomTopicValue = randomTopic(randomMode)
+    const randomSearches = await Promise.allSettled([searchRandom('vi', signal), searchRandom('en', signal)])
+    const vietnamese = topicSearches.flatMap((search, index) => index % 2 === 0 && search.status === 'fulfilled' ? search.value.map(page => ({ page, ...seeds[Math.floor(index / 2)] })) : [])
+      .concat(randomSearches[0].status === 'fulfilled' ? randomSearches[0].value.map(page => ({ page, mode: randomMode, topic: randomTopicValue })) : [])
+      .filter(item => isInteresting(item.page) && hasFeatureImages(item.page))
+    const english = topicSearches.flatMap((search, index) => index % 2 === 1 && search.status === 'fulfilled' ? search.value.map(page => ({ page, ...seeds[Math.floor(index / 2)] })) : [])
+      .concat(randomSearches[1].status === 'fulfilled' ? randomSearches[1].value.map(page => ({ page, mode: randomMode, topic: randomTopicValue })) : [])
+      .filter(item => isInteresting(item.page) && hasFeatureImages(item.page))
     const seen = new Set<number>()
     const candidates = shuffle(english.filter(({ page }) => {
       if (seen.has(page.pageid)) return false
